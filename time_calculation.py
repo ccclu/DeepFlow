@@ -13,7 +13,7 @@ from parallelism import Parallelism
 from topology import Topology
 from simulate import Graph
 import util
-from hw_component import Core, MemoryHierarchy, Network
+from hw_component import Core, MemoryHierarchy, Network, DRAM
 from model import Model_LSTM, Model_GEMM, Model_LLM 
 from tile import TiledGEMM, formatBytes
 
@@ -48,8 +48,18 @@ class TimeCalculation:
 
 
         # System Parameters
+        
         self.num_wafer = hw_config.system_config.num_wafers
         self.num_workers = hw_config.system_config.num_workers
+
+
+
+        level = 0
+        mem_config = hw_config.memory_hierarchy.mem_hr[level]
+        self.DRAM = DRAM(hw_config, mem_config, level)
+        self.memory_capacity = self.DRAM.size * self.num_workers# in bytes
+
+        # self.memory_capacity = hw_config.perimeter_breakdown.DRAM
 
         self.network = Network(hw_config)
 
@@ -109,6 +119,7 @@ class TimeCalculation:
         par.findParallelStrategy()
         self.autoPar = par.autoPar
         self.lp = par.lp
+        self.mb = par.mb
         self.kp_hidden_dim1 = par.kp_hidden_dim1
         self.kp_softmax_dim1 = par.kp_softmax_dim1
         self.kp_embedding_dim1 = par.kp_embedding_dim1
@@ -129,8 +140,25 @@ class TimeCalculation:
         self.updateParParams(self.t, self.kp1, self.kp2)
         # # Define miniBatch size
         # self.miniB = math.ceil(self.B / self.dp)
+        if self.num_workers % (self.kp_hidden_dim1 * self.kp_hidden_dim2) != 0:
+            raise ValueError("num_workers must be divisible by (kp_hidden_dim1 * kp_hidden_dim2)")
+        num_workers = self.num_workers/(self.kp_hidden_dim1*self.kp_hidden_dim2)
+        print(f'num_workers after kp_hidden_dim1 and kp_hidden_dim2: {num_workers}')
+
+        if num_workers % self.dp != 0:
+            raise ValueError("num_workers must be divisible by dp")
+        self.num_workers_dp = num_workers / self.dp # number of workers for each data parallelism batch
+        print(f'num_workers_dp after dividing by dp: {self.num_workers_dp}')
+
+        if self.num_workers_dp % self.lp != 0:
+            raise ValueError("num_workers_dp must be divisible by lp")
+        self.num_workers_lp = self.num_workers_dp / self.lp if self.lp > 1 else self.num_workers_dp #number of workers per pipeline stage
+        print(f'num_workers_lp after dividing by lp: {self.num_workers_lp}')
+        print(f'lp: {self.lp}')
+        if self.num_workers_lp != 1:
+            raise ValueError("num_workers_lp must be equal to 1")
         
-        
+
         #check parallelism parameters
         if self.kp1 != None and self.kp2 != None:
             if self.dp * self.lp * self.kp1 * self.kp2 != self.num_workers :
@@ -194,9 +222,13 @@ class TimeCalculation:
             self.n_tokens = self.model.n_tokens
             self.communication_time = self.model.communication_time
             self.N_PP = self.model.N_PP
-            self.miniB = math.ceil(self.batch_size / self.dp)
-            
-    
+            if self.batch_size % self.dp != 0:
+                raise ValueError("Batch size must be divisible by data parallelism degree")
+            self.miniB = math.ceil(self.batch_size / self.dp) # mini-batch size for each data parallel node
+            if self.miniB % self.mb != 0:
+                raise ValueError("Batch size must be divisible by micro-batch size")
+            self.microB = math.ceil(self.miniB / self.mb) if self.lp > 1 else self.miniB # micro-batch size for each pipeline stage
+
     def get_model_class(self, model_type):
         """Return the appropriate model class based on the model type."""
         model_classes = {
@@ -264,7 +296,7 @@ class TimeCalculation:
         k,
         t,
         kp1,
-        kp2,
+        kp2,    
         dp,
         lp,
         gemm,
@@ -282,7 +314,7 @@ class TimeCalculation:
 
         # Define miniBatch size
         self.dp = dp if dp != None else self.dp
-        self.miniB = math.ceil(self.B / self.dp)
+        self.miniB = math.ceil(self.B / self.dp) #
 
         self.debug = debug
         self.validating_GEMM = gemm

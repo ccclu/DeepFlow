@@ -117,7 +117,7 @@ def run_LLM(
     
 
     TC = TimeCalculationLLM(exp_hw_config, exp_model_config, mode)
-    
+    TC.check_memory(exp_hw_config, exp_model_config)
 
     time_fw, time_bw = TC.calcTime_LLM()
     # TC.printSysConfig(exp_hw_config, exp_model_config, output_file)

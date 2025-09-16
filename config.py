@@ -412,6 +412,7 @@ SchedulingConfig = _namedtuple(
         "auto",
         "dp",
         "lp",
+        "mb",
         "kp_hidden_dim1",
         "kp_softmax_dim1",
         "kp_embedding_dim1",
